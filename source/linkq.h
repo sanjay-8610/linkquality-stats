@@ -26,6 +26,7 @@
 #include "run_qmgr.h"
 #include <vector>
 #include <deque>
+#include <pthread.h>
 
 #define MAX_LINE_SIZE   1024
 #define MAX_LINKQ_PARAMS    6

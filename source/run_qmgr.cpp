@@ -166,10 +166,7 @@ void unregister_station_mac(const char* str)
 
 char*  get_link_metrics()
 {
-
-    qmgr_t *qmgr;
-    qmgr = qmgr_t::get_instance();   // always returns SAME instance
-    //return (qmgr->update_graph());
+    //return (qmgr_t::get_instance()->update_graph());
     return NULL;
 }
 

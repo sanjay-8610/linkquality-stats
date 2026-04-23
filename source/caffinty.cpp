@@ -192,6 +192,7 @@ caffinity_result_t caffinity_t::run_algorithm_caffinity()
         double disconnected_sec = (double)m_disconnected_time.tv_sec
                                   + (double)m_disconnected_time.tv_nsec / 1e9;
         static thread_local unsigned int seed = (unsigned int)time(nullptr);
+        (void)seed;
         double sleep_sec = 0;
 
         pthread_mutex_unlock(&m_lock);

@@ -22,25 +22,35 @@ ACLOCAL_AMFLAGS = -I m4
 AM_CFLAGS = -D_ANSC_LINUX -D_ANSC_USER -D_ANSC_LITTLE_ENDIAN_ -Wall -Werror
 
 # Include paths:
-#   - our own include/
-#   - ccsp-one-wifi headers (for lq_rbus_events.h, run_qmgr.h, wifi_hal types)
+#   - dependency stubs first (override sysroot wifi_*.h)
+#   - our own include/ (lq_log.h, linkquality_stats_rbus.h)
+#   - rbus sysroot headers
 AM_CFLAGS += \
+	-I$(top_srcdir)/dependency/include \
 	-I$(top_srcdir)/include \
-	-I${PKG_CONFIG_SYSROOT_DIR}$(includedir)/rbus \
-	-I${PKG_CONFIG_SYSROOT_DIR}$(includedir)/ccsp
+	-I${PKG_CONFIG_SYSROOT_DIR}$(includedir)/rbus
+
+AM_CXXFLAGS = $(AM_CFLAGS)
 
 bin_PROGRAMS = linkquality_stats
 
 linkquality_stats_SOURCES = \
 	$(top_srcdir)/source/linkquality_stats_main.c \
-	$(top_srcdir)/source/run_gmgr.cpp \
+	$(top_srcdir)/source/linkquality_stats_rbus.c \
+	$(top_srcdir)/source/run_qmgr.cpp \
 	$(top_srcdir)/source/qmgr.cpp \
-	$(top_srcdir)/source/link.cpp \
-	$(top_srcdir)/source/caffinity.cpp
+	$(top_srcdir)/source/linkq.cpp \
+	$(top_srcdir)/source/caffinty.cpp \
+	$(top_srcdir)/dependency/source/collection.c \
+	$(top_srcdir)/dependency/source/number.cpp \
+	$(top_srcdir)/dependency/source/vector.cpp \
+	$(top_srcdir)/dependency/source/sequence.cpp
 
 linkquality_stats_LDFLAGS = \
 	-lrbus \
-	-lwifi_math_utils \
+	-lcjson \
 	-lstdc++ \
+	-lpthread \
+	-lm \
 	-Wl,--no-as-needed \
 	-Wl,--as-needed

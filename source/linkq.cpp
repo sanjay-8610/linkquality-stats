@@ -115,7 +115,7 @@ vector_t linkq_t::run_algorithm(linkq_data_t data,
     
 
     v.m_num = 12;
-    for (int i = 0; i < v.m_num; i++)
+    for (unsigned int i = 0; i < v.m_num; i++)
         v.m_val[i].m_re = 0.0;
 
     // -------------------------------------------------
@@ -307,7 +307,7 @@ vector_t linkq_t::run_algorithm(linkq_data_t data,
             if (is_ignite_station && qmgr_is_score_registered()) {
                 wifi_util_dbg_print(WIFI_APPS,
                     "%s:%d score=%f threshold=%f Invoking the score callback for ignite\n",
-                    __func__, __LINE__, v.m_val[9].m_re, v.m_val[10].m_re, m_threshold);
+                    __func__, __LINE__, v.m_val[9].m_re, m_threshold);
                 if (v.m_val[9].m_re < m_threshold)
                     qmgr_invoke_score(mac,v.m_val[9].m_re,m_threshold);
                 else if (v.m_val[10].m_re < m_threshold)
@@ -520,13 +520,11 @@ int linkq_t::reinit(server_arg_t *arg )
 }
 int linkq_t::init(double threshold, unsigned int reporting_mult, stats_arg_t *stats )//, const char *test_file_name)
 {
-    char *buff, tmp[MAX_LINE_SIZE];
     unsigned int i;
     int normalize_snr = 0;
-    
+    (void)i;
     m_threshold = threshold;
     m_reporting_mult = reporting_mult;
-    mac_address_t sta_mac;
     pthread_mutex_lock(&m_vec_lock);
     if (m_stats_arr.empty()) {
         m_stats_arr.push_back(*stats);

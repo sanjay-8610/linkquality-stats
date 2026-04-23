@@ -114,14 +114,13 @@ int qmgr_t::run()
     linkq_t *lq;
     vector_t v;
     mac_addr_str_t mac_str;
-    unsigned char *sta_mac;
     std::vector<std::string> payload_list;
     bool alarm = false;
     bool rapid_disconnect = false;
     long elapsed_sec  = 0;
     bool update_alarm = false;
    std::string device_json;
-   double rms_lq_score,rms_caffinity_score,rms_ucaffinity_score;
+   double rms_lq_score = 0.0, rms_caffinity_score = 0.0, rms_ucaffinity_score = 0.0;
     gettimeofday(&start_time, NULL);
     pthread_mutex_lock(&m_lock);
     while (m_exit == false) {
@@ -138,7 +137,7 @@ int qmgr_t::run()
         } else if (rc == ETIMEDOUT) {
             pthread_mutex_unlock(&m_lock);
             elapsed_sec = tm.tv_sec - start_time.tv_sec;
-            if (elapsed_sec >= m_args.reporting) {
+            if (elapsed_sec >= (long)m_args.reporting) {
                 update_alarm = true;  
             } else {
                 update_alarm = false;  
@@ -172,7 +171,7 @@ int qmgr_t::run()
                 device_json += "\"lq_score\":" + std::to_string(lq_score) + ",";
                 device_json += "\"values\":[";
 
-                for (int i = 0; i < v.m_num; i++) {
+                for (unsigned int i = 0; i < v.m_num; i++) {
                     device_json += std::to_string(v.m_val[i].m_re);
                     if (i != v.m_num - 1) device_json += ",";
                 }
@@ -198,7 +197,6 @@ int qmgr_t::run()
             // --- Process caffinity in single pass: classify and populate JSON ---
             if (!m_caffinity_map.empty()) {
                 pthread_mutex_lock(&m_json_lock);
-                char tmp[MAX_LINE_SIZE];
                 
                 // Reset counts for this iteration
                 int connected_count = 0;
@@ -214,7 +212,6 @@ int qmgr_t::run()
                     
                     // Compute score and get connection status
                     caffinity_result_t result = caff->run_algorithm_caffinity();
-                    const char *mac_cstr = result.mac;
                     double score = result.score;
                     
                     if (result.connected) {
@@ -357,7 +354,6 @@ bool qmgr_t::is_client_connected(const char *mac_str)
 int qmgr_t::init(stats_arg_t *stats, bool create_flag)
 {
     char tmp[MAX_FILE_NAME_SZ];
-    cJSON *dev_arr;
     mac_addr_str_t mac_str;
 
     strncpy(mac_str, stats->mac_str, sizeof(mac_str) - 1);
