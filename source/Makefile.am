@@ -36,7 +36,7 @@ linkquality_stats_SOURCES = \
 	$(top_srcdir)/source/run_gmgr.cpp \
 	$(top_srcdir)/source/qmgr.cpp \
 	$(top_srcdir)/source/link.cpp \
-	$(top_srcdir)/source/caffinity.cpp \
+	$(top_srcdir)/source/caffinity.cpp
 
 linkquality_stats_LDFLAGS = \
 	-lrbus \
