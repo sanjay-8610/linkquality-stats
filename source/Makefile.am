@@ -45,7 +45,6 @@ bin_PROGRAMS = linkquality_stats
 
 linkquality_stats_SOURCES = \
 	$(top_srcdir)/source/linkquality_stats_main.c \
-	$(top_srcdir)/source/lq_ipc_receiver.c \
 	$(top_srcdir)/source/run_qmgr.cpp \
 	$(top_srcdir)/source/qmgr.cpp \
 	$(top_srcdir)/source/linkq.cpp \
@@ -60,6 +59,7 @@ linkquality_stats_LDFLAGS = \
 	-lrbus \
 	-lwifi_math_utils \
 	-lstdc++ \
+	-lcjson \
 	-lpthread \
 	-lm \
 	-Wl,--no-as-needed \

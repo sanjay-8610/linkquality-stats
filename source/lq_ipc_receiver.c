@@ -28,7 +28,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#include "lq_ipc_receiver.h"
+#include "lq_ipc.h"
 #include "linkquality_util.h"
 
 /* ---- IPC protocol (must match ccsp-one-wifi lq_ipc_sender.h) ---- */
@@ -115,6 +115,12 @@ static void *receiver_thread(void *arg)
             "%s:%d received IPC event: type=%s(%u) num_entries=%u\n",
             __func__, __LINE__,
             msg_type_to_str(hdr->msg_type), hdr->msg_type, hdr->num_entries);
+        switch (hdr->msg_type) {
+            case LQ_IPC_MSG_PERIODIC_STATS:  
+            case LQ_IPC_MSG_DISCONNECT:      
+            case LQ_IPC_MSG_RAPID_DISCONNECT: 
+            default:
+        }
 
         for (uint32_t i = 0; i < hdr->num_entries; i++) {
             lq_util_info_print(LQ_LQTY,
