@@ -29,24 +29,29 @@
 #include <unistd.h>
 
 #include "lq_ipc_receiver.h"
+#include "lq_mode_handler.h"
 #include "linkquality_util.h"
+#include "run_qmgr.h"
 
 /* ---- IPC protocol (must match ccsp-one-wifi lq_ipc_sender.h) ---- */
 
 #define LQ_STATS_SOCKET_PATH      "/tmp/linkquality_stats.sock"
 
-#define LQ_IPC_MSG_PERIODIC_STATS  1
-#define LQ_IPC_MSG_DISCONNECT      2
+#define LQ_IPC_MSG_PERIODIC_STATS   1
+#define LQ_IPC_MSG_DISCONNECT       2
 #define LQ_IPC_MSG_RAPID_DISCONNECT 3
+#define LQ_IPC_MSG_CAFFINITY_EVENT  4
+#define LQ_IPC_MSG_START_METRICS    5
+#define LQ_IPC_MSG_STOP_METRICS     6
+#define LQ_IPC_MSG_REGISTER_STA     7
+#define LQ_IPC_MSG_UNREGISTER_STA   8
+#define LQ_IPC_MSG_REINIT_METRICS   9
+#define LQ_IPC_MSG_SET_MAX_SNR     10
 
 typedef struct {
     uint32_t msg_type;
     uint32_t num_entries;
 } lq_ipc_header_t;
-
-typedef struct {
-    char mac_str[18];
-} lq_ipc_sta_entry_t;
 
 /* ---- internal state ---- */
 
@@ -54,15 +59,21 @@ static int              g_sock      = -1;
 static pthread_t        g_thread;
 static volatile sig_atomic_t g_exit = 0;
 
-/* Maximum datagram size: header + generous room for entries */
 #define LQ_IPC_BUF_SZ  65536
 
 static const char *msg_type_to_str(uint32_t type)
 {
     switch (type) {
-    case LQ_IPC_MSG_PERIODIC_STATS:  return "PERIODIC_STATS";
-    case LQ_IPC_MSG_DISCONNECT:      return "DISCONNECT";
+    case LQ_IPC_MSG_PERIODIC_STATS:   return "PERIODIC_STATS";
+    case LQ_IPC_MSG_DISCONNECT:       return "DISCONNECT";
     case LQ_IPC_MSG_RAPID_DISCONNECT: return "RAPID_DISCONNECT";
+    case LQ_IPC_MSG_CAFFINITY_EVENT:  return "CAFFINITY_EVENT";
+    case LQ_IPC_MSG_START_METRICS:    return "START_METRICS";
+    case LQ_IPC_MSG_STOP_METRICS:     return "STOP_METRICS";
+    case LQ_IPC_MSG_REGISTER_STA:     return "REGISTER_STA";
+    case LQ_IPC_MSG_UNREGISTER_STA:   return "UNREGISTER_STA";
+    case LQ_IPC_MSG_REINIT_METRICS:   return "REINIT_METRICS";
+    case LQ_IPC_MSG_SET_MAX_SNR:      return "SET_MAX_SNR";
     default:                          return "UNKNOWN";
     }
 }
@@ -80,12 +91,8 @@ static void *receiver_thread(void *arg)
         ssize_t n = recvfrom(g_sock, buf, sizeof(buf), 0, NULL, NULL);
 
         if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            if (g_exit) {
-                break;
-            }
+            if (errno == EINTR) continue;
+            if (g_exit) break;
             lq_util_error_print(LQ_LQTY,
                 "%s:%d recvfrom failed: %s\n", __func__, __LINE__, strerror(errno));
             continue;
@@ -98,30 +105,132 @@ static void *receiver_thread(void *arg)
         }
 
         lq_ipc_header_t *hdr = (lq_ipc_header_t *)buf;
-        uint32_t expected_sz = sizeof(lq_ipc_header_t) +
-                               hdr->num_entries * sizeof(lq_ipc_sta_entry_t);
+        uint32_t count = hdr->num_entries;
+        size_t payload_sz = (size_t)n - sizeof(lq_ipc_header_t);
 
-        if ((uint32_t)n < expected_sz) {
-            lq_util_error_print(LQ_LQTY,
-                "%s:%d truncated datagram (got %zd, need %u), ignoring\n",
-                __func__, __LINE__, n, expected_sz);
-            continue;
+        /*
+         * For stats_arg_t-bearing messages, validate the payload size.
+         * Other messages (START/STOP/REGISTER/UNREGISTER/REINIT/SET_MAX_SNR)
+         * carry different-sized or no payloads and are validated per-case.
+         */
+        if (hdr->msg_type <= LQ_IPC_MSG_CAFFINITY_EVENT && count > 0) {
+            size_t expected_data = count * sizeof(stats_arg_t);
+            if (payload_sz < expected_data) {
+                lq_util_error_print(LQ_LQTY,
+                    "%s:%d truncated datagram (got %zd, need %zu), ignoring\n",
+                    __func__, __LINE__, n,
+                    sizeof(lq_ipc_header_t) + expected_data);
+                continue;
+            }
         }
 
-        lq_ipc_sta_entry_t *entries =
-            (lq_ipc_sta_entry_t *)(buf + sizeof(lq_ipc_header_t));
+        stats_arg_t *entries = (stats_arg_t *)(buf + sizeof(lq_ipc_header_t));
 
         lq_util_info_print(LQ_LQTY,
-            "%s:%d received IPC event: type=%s(%u) num_entries=%u\n",
+            "%s:%d IPC event: type=%s(%u) count=%u\n",
             __func__, __LINE__,
-            msg_type_to_str(hdr->msg_type), hdr->msg_type, hdr->num_entries);
+            msg_type_to_str(hdr->msg_type), hdr->msg_type, count);
 
-        for (uint32_t i = 0; i < hdr->num_entries; i++) {
+        switch (hdr->msg_type) {
+        case LQ_IPC_MSG_PERIODIC_STATS:
+            for (uint32_t i = 0; i < count; i++) {
+                lq_util_info_print(LQ_LQTY,
+                    "%s:%d PERIODIC_STATS [%u] MAC=%s snr=%d vap=%u "
+                    "conn_time=%llds disconn_time=%llds\n",
+                    __func__, __LINE__, i, entries[i].mac_str,
+                    entries[i].dev.cli_SNR, entries[i].vap_index,
+                    (long long)entries[i].total_connected_time.tv_sec,
+                    (long long)entries[i].total_disconnected_time.tv_sec);
+            }
+            lq_dispatch_periodic_stats(entries, (int)count);
+            break;
+
+        case LQ_IPC_MSG_DISCONNECT:
+            for (uint32_t i = 0; i < count; i++) {
+                lq_util_info_print(LQ_LQTY,
+                    "%s:%d DISCONNECT MAC=%s\n",
+                    __func__, __LINE__, entries[i].mac_str);
+                lq_dispatch_disconnect(&entries[i]);
+            }
+            break;
+
+        case LQ_IPC_MSG_RAPID_DISCONNECT:
+            for (uint32_t i = 0; i < count; i++) {
+                lq_util_info_print(LQ_LQTY,
+                    "%s:%d RAPID_DISCONNECT MAC=%s\n",
+                    __func__, __LINE__, entries[i].mac_str);
+                lq_dispatch_rapid_disconnect(&entries[i]);
+            }
+            break;
+
+        case LQ_IPC_MSG_CAFFINITY_EVENT:
+            /* Single HAL/DHCP event for caffinity */
+            for (uint32_t i = 0; i < count; i++) {
+                lq_util_info_print(LQ_LQTY,
+                    "[linkstatus] %s:%d CAFFINITY_EVENT MAC=%s event=%d status=%u\n",
+                    __func__, __LINE__, entries[i].mac_str,
+                    entries[i].event, entries[i].status_code);
+                lq_dispatch_caffinity_event(&entries[i]);
+            }
+            break;
+
+        case LQ_IPC_MSG_START_METRICS:
             lq_util_info_print(LQ_LQTY,
-                "%s:%d   [%u] MAC=%s event=%s\n",
-                __func__, __LINE__, i,
-                entries[i].mac_str,
-                msg_type_to_str(hdr->msg_type));
+                "%s:%d START_METRICS\n", __func__, __LINE__);
+            lq_dispatch_start_metrics();
+            break;
+
+        case LQ_IPC_MSG_STOP_METRICS:
+            lq_util_info_print(LQ_LQTY,
+                "%s:%d STOP_METRICS\n", __func__, __LINE__);
+            lq_dispatch_stop_metrics();
+            break;
+
+        case LQ_IPC_MSG_REGISTER_STA:
+        {
+            /* Payload is a null-terminated MAC string */
+            const char *mac_str = (const char *)(buf + sizeof(lq_ipc_header_t));
+            lq_util_info_print(LQ_LQTY,
+                "%s:%d REGISTER_STA mac=%s\n", __func__, __LINE__, mac_str);
+            lq_dispatch_register_station(mac_str);
+            break;
+        }
+
+        case LQ_IPC_MSG_UNREGISTER_STA:
+        {
+            const char *mac_str = (const char *)(buf + sizeof(lq_ipc_header_t));
+            lq_util_info_print(LQ_LQTY,
+                "%s:%d UNREGISTER_STA mac=%s\n", __func__, __LINE__, mac_str);
+            lq_dispatch_unregister_station(mac_str);
+            break;
+        }
+
+        case LQ_IPC_MSG_REINIT_METRICS:
+        {
+            server_arg_t *sarg = (server_arg_t *)(buf + sizeof(lq_ipc_header_t));
+            lq_util_info_print(LQ_LQTY,
+                "%s:%d REINIT_METRICS reporting=%u threshold=%f\n",
+                __func__, __LINE__, sarg->reporting, sarg->threshold);
+            lq_dispatch_reinit_metrics(sarg);
+            break;
+        }
+
+        case LQ_IPC_MSG_SET_MAX_SNR:
+        {
+            radio_max_snr_t *snr = (radio_max_snr_t *)(buf + sizeof(lq_ipc_header_t));
+            lq_util_info_print(LQ_LQTY,
+                "%s:%d SET_MAX_SNR 2g=%d 5g=%d 6g=%d\n",
+                __func__, __LINE__, snr->radio_2g_max_snr,
+                snr->radio_5g_max_snr, snr->radio_6g_max_snr);
+            lq_dispatch_set_max_snr(snr);
+            break;
+        }
+
+        default:
+            lq_util_error_print(LQ_LQTY,
+                "%s:%d unknown IPC msg_type=%u, ignoring\n",
+                __func__, __LINE__, hdr->msg_type);
+            break;
         }
     }
 

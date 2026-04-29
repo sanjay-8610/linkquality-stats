@@ -22,27 +22,14 @@
 
 /*
  * AF_UNIX datagram socket receiver for link-quality events sent by
- * OneWifi (wifi_stats_assoc_client.c) to the linkquality-stats daemon.
+ * OneWifi to the linkquality-stats daemon.
  *
- * All socket-related code lives in lq_ipc_receiver.c / .h to keep it
- * separate from the main daemon logic.
- */
-
-/*
- * Start the IPC receiver thread.
- * Creates the AF_UNIX datagram socket, binds to LQ_STATS_SOCKET_PATH,
- * and spawns a background thread that reads datagrams and prints received
- * events (MAC + event type).
+ * Receives full stats_arg_t payloads and dispatches them to the
+ * appropriate qmgr functions (add_stats_metrics, disconnect, etc.).
  *
  * Returns 0 on success, -1 on failure.
  */
 int lq_ipc_receiver_start(void);
-
-/*
- * Stop the IPC receiver thread.
- * Signals the thread to exit, closes the socket, unlinks the socket file,
- * and joins the thread.
- */
 void lq_ipc_receiver_stop(void);
 
 #endif /* LQ_IPC_RECEIVER_H */

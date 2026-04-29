@@ -44,6 +44,7 @@
 #include "run_qmgr.h"
 #include "linkquality_util.h"
 #include "lq_ipc_receiver.h"
+#include "lq_mode_handler.h"
 
 #define COMPONENT_NAME          "linkquality_stats"
 #define LQ_PID_FILE             "/var/tmp/linkquality_stats.pid"
@@ -247,6 +248,9 @@ int main(int argc, char *argv[])
 
     /* Start background link-quality metrics collection (single call) */
     start_link_metrics();
+
+    /* Detect GW vs EXT mode and instantiate the appropriate handler */
+    lq_mode_handler_init();
 
     /* Start IPC receiver for AF_UNIX events from OneWifi */
     if (lq_ipc_receiver_start() != 0) {
