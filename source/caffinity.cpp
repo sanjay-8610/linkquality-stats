@@ -69,9 +69,15 @@ int caffinity_t::periodic_stats_update(stats_arg_t *arg)
     {
         case wifi_event_hal_auth_frame:
             m_auth_attempts++;
+            // Also handles PERIODIC_STATS (event=0 same as auth_frame):
+            // infer m_connected from total_connected_time
+            if (arg->total_connected_time.tv_sec > 0) {
+                m_connected = true;
+            }
             break;
 
         case wifi_event_hal_deauth_frame:
+            m_connected = false;
             m_auth_failures++;
             m_disconnected_time = arg->total_disconnected_time;
             break;
@@ -182,6 +188,10 @@ caffinity_result_t caffinity_t::run_algorithm_caffinity()
         
         double total = connected_sec + disconnected_sec + sleep_sec;
 
+        lq_util_info_print(LQ_CAFF,
+            "stats_dump CAFF_CONNECTED_RAW MAC=%s connected_sec=%.4f disconnected_sec=%.4f sleep_sec=%.4f total=%.4f\n",
+            m_mac, connected_sec, disconnected_sec, sleep_sec, total);
+
         if (total <= 0.0) {
             lq_util_info_print(LQ_CAFF,
                 "caffinity %s:%d Connected client, total time is zero, returning score=0\n",
@@ -264,6 +274,21 @@ caffinity_result_t caffinity_t::run_algorithm_caffinity()
 
     sigmoid_factor = 1.0 / (1.0 + exp(exponent));
 
+    lq_util_info_print(LQ_CAFF,
+        "stats_dump CAFF_UNCONNECTED_RAW MAC=%s "
+        "cli_snr=%d channel_util=%d "
+        "auth_att=%u auth_fail=%u auth_fail_rate=%.4f "
+        "assoc_att=%u assoc_fail=%u assoc_fail_rate=%.4f "
+        "dhcp_disc=%u dhcp_offer=%u dhcp_req=%u dhcp_ack=%u dhcp_nak=%u dhcp_decline=%u "
+        "dhcp_att=%u dhcp_fail=%u dhcp_fail_rate=%.4f "
+        "failure_ratio=%.4f snr_norm=%.4f snr_sq=%.4f exponent=%.4f sigmoid=%.4f\n",
+        m_mac,
+        cli_snr, channel_utilization,
+        m_auth_attempts, m_auth_failures, auth_failure_rate,
+        m_assoc_attempts, m_assoc_failures, assoc_failure_rate,
+        m_discover, m_offer, m_request, m_ack, m_nak, m_decline,
+        dhcp_attempts, dhcp_failures, dhcp_failure_rate,
+        failure_ratio, snr_normalized, snr_squared, exponent, sigmoid_factor);
 
     // Calculate final score: (1 - failure_ratio) * snr_squared * sigmoid_factor
     score = (1.0 - failure_ratio) * snr_squared * sigmoid_factor;

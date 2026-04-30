@@ -43,6 +43,7 @@
 #include "linkquality_stats_rbus.h"
 #include "run_qmgr.h"
 #include "linkquality_util.h"
+#include "lq_ipc_receiver.h"
 
 #define COMPONENT_NAME          "linkquality_stats"
 #define LQ_PID_FILE             "/var/tmp/linkquality_stats.pid"
@@ -248,11 +249,9 @@ int main(int argc, char *argv[])
     start_link_metrics();
 
     /* Start IPC receiver for AF_UNIX events from OneWifi */
-    #if 0
     if (lq_ipc_receiver_start() != 0) {
         lq_util_error_print(LQ_LQTY, "%s:%d IPC receiver start failed\n", __func__, __LINE__);
     }
-    #endif
 
     /* Signal parent: init done, parent (systemd) can exit cleanly */
     sem_post(g_sem);
@@ -265,9 +264,9 @@ int main(int argc, char *argv[])
 
     lq_util_info_print(LQ_LQTY, "%s:%d shutting down linkquality_stats\n",
                        __func__, __LINE__);
-   #if 0 
+   
     lq_ipc_receiver_stop();
-   #endif
+
     unlink(LQ_PID_FILE);
 
     return EXIT_SUCCESS;

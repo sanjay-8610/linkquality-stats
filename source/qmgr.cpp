@@ -499,12 +499,23 @@ int qmgr_t::run()
                 }
                 lq_util_dbg_print(LQ_LQTY,"%s:%d Device %s has valid data (v.m_num=%d), updating JSON\n",
                     __func__,__LINE__, lq->get_mac_addr(), v.m_num);
+                update_json(lq->get_mac_addr(), v, out_obj, alarm);
                 strncpy(mac_str, lq->get_mac_addr(), sizeof(mac_str) - 1);
                 mac_str[sizeof(mac_str) - 1] = '\0';
                 
-                // Accumulate RMS for Link Quality Score (per-iteration)
                 double lq_score = v.m_val[SCORE_INDEX].m_re;
+                lq_util_info_print(LQ_LQTY,
+                    "stats_dump LQ MAC=%s SNR=%.4f PER=%.4f PHY=%.4f "
+                    "DL_SNR=%.4f DL_PER=%.4f DL_PHY=%.4f "
+                    "UL_SNR=%.4f UL_PER=%.4f UL_PHY=%.4f "
+                    "DL_Score=%.4f UL_Score=%.4f Score=%.4f alarm=%d\n",
+                    lq->get_mac_addr(),
+                    v.m_val[0].m_re, v.m_val[1].m_re, v.m_val[2].m_re,
+                    v.m_val[3].m_re, v.m_val[4].m_re, v.m_val[5].m_re,
+                    v.m_val[6].m_re, v.m_val[7].m_re, v.m_val[8].m_re,
+                    v.m_val[9].m_re, v.m_val[10].m_re, v.m_val[11].m_re, alarm);
                 lq_sum_sq_iter += lq_score * lq_score;
+                lq_count_iter++;
 
                 device_json += "{";
                 device_json += "\"mac\":\"" + std::string(lq->get_mac_addr()) + "\",";
@@ -516,14 +527,12 @@ int qmgr_t::run()
                     if (i != v.m_num - 1) device_json += ",";
                 }
 
-               device_json += "]";
-                device_json += "\"caff_score\":" +  std::to_string(0.888) + ",\"values\":[";
+               device_json += "],";
+                device_json += "\"caff_score\":" +  std::to_string(0.888) + ",\"caff_values\":[";
 	       device_json +=  std::to_string(29.4455) +"]}";
                lq_util_info_print(LQ_LQTY,"Pramod %s:%d device_json = %s\n",__func__,__LINE__,device_json.c_str());
                payload_list.push_back(device_json);
 	       device_json = "";
-		lq_sum_sq_iter += lq_score * lq_score;
-                lq_count_iter++;
 
                 lq = (linkq_t *)hash_map_get_next(m_link_map, lq);
             }
@@ -532,6 +541,10 @@ int qmgr_t::run()
             if (lq_count_iter > 0) {
                 double rms_lq = sqrt(lq_sum_sq_iter / lq_count_iter);
                 rms_lq_score = rms_lq;
+                lq_util_info_print(LQ_LQTY,
+                    "stats_dump LQ_RMS score=%.4f device_count=%d\n",
+                    rms_lq, lq_count_iter);
+                update_rms_lq_aggregate_json(rms_lq);
             }
             
             // --- Process caffinity in single pass: classify and populate JSON ---
@@ -559,12 +572,18 @@ int qmgr_t::run()
                     double score = result.score;
                     
                     if (result.connected) {
+                        lq_util_info_print(LQ_LQTY,
+                            "stats_dump CAFF_CONNECTED MAC=%s score=%.4f\n",
+                            mac_cstr, score);
                         // Process connected client
                         populate_caffinity_client_json(mac_cstr, score, get_local_time(tmp, sizeof(tmp), true),
                                                       conn_arr, unconn_arr, "ConnectedClients");
                         conn_sum_sq_iter += score * score;
                         connected_count++;
                     } else {
+                        lq_util_info_print(LQ_LQTY,
+                            "stats_dump CAFF_UNCONNECTED MAC=%s score=%.4f\n",
+                            mac_cstr, score);
                         // Process unconnected client
                         populate_caffinity_client_json(mac_cstr, score, get_local_time(tmp, sizeof(tmp), true),
                                                       unconn_arr, conn_arr, "UnconnectedClients");
@@ -578,8 +597,9 @@ int qmgr_t::run()
                 double rms_unconnected = (unconnected_count > 0) ? sqrt(unconn_sum_sq_iter / unconnected_count) : 0.0;
                 rms_caffinity_score = rms_connected;
                 rms_ucaffinity_score = rms_unconnected;
-                lq_util_info_print(LQ_LQTY, "%s:%d RMS connected %lf samples, RMS unconnected %lf samples\n",
-                        __func__, __LINE__, rms_connected, rms_unconnected);
+                lq_util_info_print(LQ_LQTY,
+                    "stats_dump CAFF_RMS connected=%.4f(%d clients) unconnected=%.4f(%d clients)\n",
+                    rms_connected, connected_count, rms_unconnected, unconnected_count);
                 // Update RMS aggregate JSON
                 update_rms_aggregate_json(rms_connected, rms_unconnected);
 
@@ -621,6 +641,35 @@ int qmgr_t::run()
     }
     pthread_mutex_unlock(&m_lock);
     return 0;
+}
+
+
+
+void qmgr_t::deinit()
+{
+    m_exit = true;
+    pthread_cond_signal(&m_cond);
+
+    // Wait for thread to finish
+    pthread_join(m_thread, NULL);
+    pthread_cond_destroy(&m_cond);
+    
+    // Clean up caffinity map
+    std::unordered_map<std::string, caffinity_t*>::iterator caff_it;
+    for (caff_it = m_caffinity_map.begin(); caff_it != m_caffinity_map.end(); ++caff_it) {
+        delete caff_it->second;
+    }
+    m_caffinity_map.clear();
+    
+    hash_map_destroy(m_link_map);
+    lq_util_info_print(LQ_LQTY," %s:%d\n",__func__,__LINE__);
+    return;
+}
+
+void qmgr_t::deinit(mac_addr_str_t mac_str)
+{
+    lq_util_info_print(LQ_LQTY," %s:%d\n",__func__,__LINE__);
+    return;
 }
 
 cJSON *qmgr_t::create_dev_template(mac_addr_str_t mac_str,unsigned int vap_index)
@@ -675,6 +724,7 @@ cJSON *qmgr_t::create_caffinity_template(mac_addr_str_t mac_str)
     return obj;
 }
 
+#if 0
 void qmgr_t::deinit()
 {
     m_exit = true;
@@ -701,6 +751,8 @@ void qmgr_t::deinit(mac_addr_str_t mac_str)
     lq_util_info_print(LQ_LQTY," %s:%d\n",__func__,__LINE__);
     return;
 }
+#endif
+
  void qmgr_t::remove_device_from_out_obj(cJSON *out_obj, const char *mac_str)
 {
     if (!out_obj || !mac_str) return;
@@ -1205,6 +1257,55 @@ cJSON* qmgr_t::create_affinity_template(mac_addr_str_t mac_str,
     return obj;
 }
 
+#if 0
+void qmgr_t::build_and_print_metrics_string(char *buf, int buf_len)
+{
+    int offset = 0;
+    linkq_t *lq;
+    sample_t *samples = NULL;
+    size_t sample_count;
+
+    // --- LinkQ section ---
+    offset += snprintf(buf + offset, buf_len - offset, "[LinkQ]");
+
+    lq = (linkq_t *)hash_map_get_first(m_link_map);
+    while (lq != NULL && offset < buf_len - 1) {
+        sample_count = lq->get_window_samples(&samples);
+        if (sample_count > 0) {
+            const sample_t *s = &samples[sample_count - 1]; // most recent
+            offset += snprintf(buf + offset, buf_len - offset,
+                " MAC=%s SNR=%.2f PER=%.2f PHY=%.2f Score=%.2f |",
+                lq->get_mac_addr(), s->snr, s->per, s->phy, s->score);
+            free(samples);
+            samples = NULL;
+        }
+        lq = (linkq_t *)hash_map_get_next(m_link_map, lq);
+    }
+
+    // --- Caffinity section ---
+    offset += snprintf(buf + offset, buf_len - offset, " [Caffinity]");
+
+    pthread_mutex_lock(&m_json_lock);
+    std::unordered_map<std::string, caffinity_t*>::iterator caff_it;
+    for (caff_it = m_caffinity_map.begin();
+         caff_it != m_caffinity_map.end() && offset < buf_len - 1;
+         ++caff_it) {
+        caffinity_t *caff = caff_it->second;
+        if (!caff) continue;
+        caffinity_result_t result = caff->run_algorithm_caffinity();
+        struct timespec conn_t  = caff->get_connected_time();
+        struct timespec disc_t  = caff->get_disconnected_time();
+        offset += snprintf(buf + offset, buf_len - offset,
+            " MAC=%s Score=%.2f ConnTime=%ld.%03lds DiscTime=%ld.%03lds |",
+            result.mac, result.score,
+            (long)conn_t.tv_sec,  conn_t.tv_nsec  / 1000000L,
+            (long)disc_t.tv_sec,  disc_t.tv_nsec  / 1000000L);
+    }
+    pthread_mutex_unlock(&m_json_lock);
+
+    lq_util_info_print(LQ_LQTY, "%s:%d Metrics: %s\n", __func__, __LINE__, buf);
+}
+#endif
 int qmgr_t::store_gw_mac(uint8_t *mac) 
 {
     lq_util_info_print(LQ_LQTY," %s:%d\n",__func__,__LINE__);
