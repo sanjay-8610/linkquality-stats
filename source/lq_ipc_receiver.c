@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "lq_ipc_receiver.h"
+#include "lq_ipc_byteorder.h"
 #include "linkquality_util.h"
 #include "run_qmgr.h"
 
@@ -43,10 +44,7 @@
 #define LQ_IPC_MSG_REINIT_METRICS   9
 #define LQ_IPC_MSG_SET_MAX_SNR     10
 
-typedef struct {
-    uint32_t msg_type;
-    uint32_t num_entries;
-} lq_ipc_header_t;
+/* lq_ipc_header_t is provided by lq_ipc_byteorder.h */
 
 /* ---- internal state ---- */
 
@@ -81,6 +79,9 @@ static void *receiver_thread(void *arg)
     lq_util_info_print(LQ_LQTY,
         "%s:%d IPC receiver thread started, listening on %s\n",
         __func__, __LINE__, LQ_STATS_SOCKET_PATH);
+    lq_util_info_print(LQ_LQTY,
+        "%s:%d [IPC-RECV] Host byte order: %s, expecting network (big-endian) from sender\n",
+        __func__, __LINE__, lq_detect_host_byteorder());
 
     while (!g_exit) {
         ssize_t n = recvfrom(g_sock, buf, sizeof(buf), 0, NULL, NULL);
@@ -100,6 +101,10 @@ static void *receiver_thread(void *arg)
         }
 
         lq_ipc_header_t *hdr = (lq_ipc_header_t *)buf;
+
+        /* Convert header from network byte order to host byte order */
+        lq_hdr_ntoh(hdr);
+
         uint32_t count = hdr->num_entries;
         size_t payload_sz = (size_t)n - sizeof(lq_ipc_header_t);
 
@@ -120,6 +125,11 @@ static void *receiver_thread(void *arg)
         }
 
         stats_arg_t *entries = (stats_arg_t *)(buf + sizeof(lq_ipc_header_t));
+
+        /* Convert stats_arg_t entries from network byte order to host byte order */
+        if (hdr->msg_type <= LQ_IPC_MSG_CAFFINITY_EVENT && count > 0) {
+            lq_stats_arg_array_ntoh(entries, count);
+        }
 
         lq_util_info_print(LQ_LQTY,
             "%s:%d IPC event: type=%s(%u) count=%u\n",

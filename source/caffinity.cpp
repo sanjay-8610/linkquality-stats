@@ -79,7 +79,8 @@ int caffinity_t::periodic_stats_update(stats_arg_t *arg)
         case wifi_event_hal_deauth_frame:
             m_connected = false;
             m_auth_failures++;
-            m_disconnected_time = arg->total_disconnected_time;
+            m_disconnected_time.tv_sec  = (time_t)arg->total_disconnected_time.tv_sec;
+            m_disconnected_time.tv_nsec = (long)arg->total_disconnected_time.tv_nsec;
             break;
 
         case wifi_event_hal_assoc_req_frame:
@@ -95,7 +96,8 @@ int caffinity_t::periodic_stats_update(stats_arg_t *arg)
                 m_connected = false;
             } else {
                 m_connected = true;
-                m_connected_time = arg->total_connected_time;
+                m_connected_time.tv_sec  = (time_t)arg->total_connected_time.tv_sec;
+                m_connected_time.tv_nsec = (long)arg->total_connected_time.tv_nsec;
 
                 //lq_util_info_print(LQ_CAFF, "%s:%d check in vector %s\n", __func__, __LINE__, arg->ap_mac_str);
                 if (std::find(m_ap_mac.begin(), m_ap_mac.end(), arg->ap_mac_str) == m_ap_mac.end()) {
@@ -118,7 +120,8 @@ int caffinity_t::periodic_stats_update(stats_arg_t *arg)
 
         case wifi_event_hal_disassoc_device:
             m_connected = false;
-            m_disconnected_time = arg->total_disconnected_time;
+            m_disconnected_time.tv_sec  = (time_t)arg->total_disconnected_time.tv_sec;
+            m_disconnected_time.tv_nsec = (long)arg->total_disconnected_time.tv_nsec;
             lq_util_info_print(LQ_CAFF, "caffinity CAFF %s:%d DISASSOC device, m_connected=false, disconnected_time=%ld.%09ld\n",
                 __func__, __LINE__, (long)m_disconnected_time.tv_sec, m_disconnected_time.tv_nsec);
             break;
@@ -129,11 +132,12 @@ int caffinity_t::periodic_stats_update(stats_arg_t *arg)
     }
 
     // Update m_connected_time from total_connected_time
-    m_connected_time = arg->total_connected_time;
-    
+    m_connected_time.tv_sec  = (time_t)arg->total_connected_time.tv_sec;
+    m_connected_time.tv_nsec = (long)arg->total_connected_time.tv_nsec;
 
     // Update m_disconnected_time from total_disconnected_time
-    m_disconnected_time = arg->total_disconnected_time;
+    m_disconnected_time.tv_sec  = (time_t)arg->total_disconnected_time.tv_sec;
+    m_disconnected_time.tv_nsec = (long)arg->total_disconnected_time.tv_nsec;
 
     // Update cli_SNR only if client is connected to avoid overwriting valid SNR with 0
     if (m_connected) {
