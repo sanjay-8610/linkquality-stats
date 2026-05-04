@@ -1028,8 +1028,6 @@ int qmgr_t::caffinity_periodic_stats_update(stats_arg_t *stats)
         lq_util_error_print(LQ_LQTY, "%s:%d invalid stats or empty MAC\n", __func__, __LINE__);
         return -1;
     }
-    update_affinity_stats(stats,true);
-
     mac_addr_str_t mac_str;
     strncpy(mac_str, stats->mac_str, sizeof(mac_str) - 1);
     mac_str[sizeof(mac_str) - 1] = '\0';
@@ -1069,6 +1067,7 @@ int qmgr_t::caffinity_periodic_stats_update(stats_arg_t *stats)
     }
 
     pthread_mutex_unlock(&m_json_lock);
+    update_affinity_stats(stats,true);
     return 0;
 }
 
