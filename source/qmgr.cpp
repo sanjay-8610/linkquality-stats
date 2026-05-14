@@ -463,7 +463,7 @@ int qmgr_t::run()
                     if (!u_map.empty() || rapid_disconnect) {
                         update_json_unlocked(mac.c_str(), u_map, out_obj, alarm);
 
-                        double lq_score = u_map["Score"];
+                        double lq_score = u_map["DOWNLINK_Score"];
                         lq_sum_sq_iter += lq_score * lq_score;
                         lq_count_iter++;
 

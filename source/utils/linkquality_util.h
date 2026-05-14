@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <telemetry_busmessage_sender.h>
 #include "bus.h"
 #include "ccsp.h"
  

@@ -40,11 +40,11 @@
 #include <time.h>
 #include <pthread.h>
 #include <unistd.h>
-#include "linkquality_stats_rbus.h"
 #include <netinet/in.h>
 #include "qmgr.h"
 #include "web.h"
 #include "linkquality_util.h"
+#include "linkquality_stats_rbus.h"
 #include "ipc_receiver.h"
 
 #define COMPONENT_NAME          "linkquality_stats"
@@ -229,7 +229,9 @@ int main(int argc, char *argv[])
     signal(SIGINT,  sig_handler);
     signal(SIGTERM, sig_handler);
     signal(SIGPIPE, SIG_IGN);
-    
+     
+    /* Initialize the t2_events */
+    t2_init("wei");
     /* Start the embedded webserver (port 8082).
      * Flow: main -> web_t::start -> accept loop thread. */
     {

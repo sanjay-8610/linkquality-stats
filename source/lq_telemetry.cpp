@@ -1,4 +1,3 @@
-#ifdef ENABLE_T2_TELEMETRY
 
 #include "lq_telemetry.h"
 #include "utils/linkquality_util.h"
@@ -6,26 +5,6 @@
 #include <cstring>
 #include <string>
 #include <vector>
-
-extern "C" {
-#ifdef LINKQUALITY_RDKB_T2_SUPPORT
-    // Real T2 API — resolved from libtelemetry_msgsender at link time
-    int t2_event_s(char *marker, char *value);
-    int t2_event_d(char *marker, int value);
-#else
-    // No-op stubs when telemetry library is not available
-    static int t2_event_s(char *marker, char *value)
-    {
-        (void)marker; (void)value;
-        return 0;
-    }
-    static int t2_event_d(char *marker, int value)
-    {
-        (void)marker; (void)value;
-        return 0;
-    }
-#endif
-}
 
 void lq_publish_t2_events(const std::vector<std::string> &station_metrics,
                            double avg_lq_score, double avg_caff_score,
@@ -68,4 +47,3 @@ void lq_publish_t2_events(const std::vector<std::string> &station_metrics,
     lq_util_error_print(LQ_LQTY, "%s:%d t2_event_s(%s, %s) returned %d\n", __func__, __LINE__, marker, value, ret);
 }
 
-#endif // ENABLE_T2_TELEMETRY
