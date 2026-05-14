@@ -21,6 +21,7 @@
 #include <string.h>
 #include <dirent.h>
 #include "qmgr.h"
+#include "lq_telemetry.h"
 #include <sys/time.h>
 #include <time.h>
 #include <errno.h>
@@ -435,6 +436,10 @@ int qmgr_t::run()
                 __func__,__LINE__, m_wifi_metrics_map.size());
             double lq_sum_sq_iter = 0.0;
             int lq_count_iter = 0;
+            std::vector<std::string> t2_station_metrics;
+            double t2_lq_sum = 0.0;
+            double t2_caff_conn_sum = 0.0;
+            double t2_caff_unconn_sum = 0.0;
 
             // Hold m_json_lock for all map iterations (linkq + caffinity)
             pthread_mutex_lock(&m_json_lock);
@@ -453,7 +458,7 @@ int qmgr_t::run()
             for (auto& [mac, wm] : m_wifi_metrics_map) {
                 if (!wm) continue;
 
-                // Process linkq
+                // Process linkq (connected clients only)
                 if (wm->lq) {
                     connected_lq_count++;
                     u_map = wm->lq->run_test(wm->m_mac, alarm, update_alarm, rapid_disconnect);
@@ -463,10 +468,16 @@ int qmgr_t::run()
                         double lq_score = u_map["Score"];
                         lq_sum_sq_iter += lq_score * lq_score;
                         lq_count_iter++;
+
+                        // Collect per-station metric for T2 telemetry
+                        char t2_buf[256];
+                        snprintf(t2_buf, sizeof(t2_buf), "mac=%s,score=%.2f", wm->m_mac, lq_score);
+                        t2_station_metrics.emplace_back(t2_buf);
+                        t2_lq_sum += lq_score;
                     }
                 }
 
-                // Process caffinity
+                // Process caffinity (connected + disconnected clients)
                 if (wm->caff) {
                     caffinity_result_t result = wm->caff->run_algorithm_caffinity(wm->m_mac);
                     double score = result.score;
@@ -476,11 +487,13 @@ int qmgr_t::run()
                                                       conn_arr, unconn_arr, "ConnectedClients");
                         conn_sum_sq_iter += score * score;
                         connected_count++;
+                        t2_caff_conn_sum += score;
                     } else {
                         populate_caffinity_client_json(wm->m_mac, score, time_str,
                                                       unconn_arr, conn_arr, "UnconnectedClients");
                         unconn_sum_sq_iter += score * score;
                         unconnected_count++;
+                        t2_caff_unconn_sum += score;
                     }
                 }
             }
@@ -514,6 +527,15 @@ int qmgr_t::run()
                 update_graph(out_obj);
                 if (qmgr_is_batch_registered()) {
                     push_reporting_subdoc();
+                }
+                lq_util_error_print(LQ_LQTY, "%s:%d T2 events: stations=%zu\n", __func__, __LINE__, t2_station_metrics.size());
+                // Publish T2 telemetry at reporting interval (only if we have station data)
+                if (!t2_station_metrics.empty()) {
+                    double avg_lq = t2_lq_sum / lq_count_iter;
+                    double avg_caff = (connected_count > 0) ? (t2_caff_conn_sum / connected_count) : 0.0;
+                    double avg_ucaff = (unconnected_count > 0) ? (t2_caff_unconn_sum / unconnected_count) : 0.0;
+                    lq_util_error_print(LQ_LQTY, "%s:%d Publishing T2 events: stations=%zu avg_lq=%.2f avg_caff=%.2f avg_ucaff=%.2f\n", __func__, __LINE__, t2_station_metrics.size(), avg_lq, avg_caff, avg_ucaff);
+                    lq_publish_t2_events(t2_station_metrics, avg_lq, avg_caff, avg_ucaff);
                 }
             }
             pthread_mutex_lock(&m_lock);

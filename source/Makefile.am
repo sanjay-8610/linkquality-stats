@@ -32,7 +32,7 @@ AM_CFLAGS += \
 	-I${PKG_CONFIG_SYSROOT_DIR}$(includedir)/ccsp \
 	-I${PKG_CONFIG_SYSROOT_DIR}$(includedir)/ccsp/math_utils
 
-AM_CXXFLAGS = -O2 -Wall -Wextra
+AM_CXXFLAGS = -O2 -Wall -Wextra -DENABLE_T2_TELEMETRY
 AM_CXXFLAGS += \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/source \
@@ -51,6 +51,7 @@ linkquality_stats_SOURCES = \
 	$(top_srcdir)/source/linkq.cpp \
 	$(top_srcdir)/source/caffinity.cpp \
 	$(top_srcdir)/source/ipc_receiver.cpp \
+	$(top_srcdir)/source/lq_telemetry.cpp \
 	$(top_srcdir)/source/utils/webserver/src/web.cpp \
 	$(top_srcdir)/source/utils/linkquality_util.c \
 	$(top_srcdir)/source/utils/collection.c
