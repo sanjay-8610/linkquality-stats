@@ -58,8 +58,6 @@ typedef struct wifi_metrics {
 
 class ipc_recv_t;
 class qmgr_t {
-    pthread_mutex_t m_lock;
-    pthread_cond_t m_cond;
     server_arg_t    m_args;
     pthread_mutex_t m_json_lock;
     stats_arg_t    m_stats;
@@ -68,10 +66,10 @@ class qmgr_t {
     qmgr_t();
     qmgr_t(server_arg_t *args,stats_arg_t *stats);
     bool m_exit;
-    pthread_t m_thread;
     bool m_run_started;
     bool m_bg_running;
     ipc_recv_t *m_ipc;
+    struct timeval m_reporting_start_time;
     
     cJSON *out_obj;
     cJSON *affinity_obj;
@@ -102,10 +100,10 @@ public:
     void deinit();
     void trim_cjson_array(cJSON *arr, int max_len);
     void deinit(const std::string &mac_str);
-    int run();
+    void run_periodic();
     int push_reporting_subdoc();
     void start_background_run();
-    static void* run_helper(void* arg);
+    unsigned int get_sampling() const { return m_args.sampling; }
     void remove_device_from_out_obj(cJSON *out_obj, const char *mac_str);
     static qmgr_t* get_instance();
     char *get_local_time(char *buff, unsigned int len,bool flag);

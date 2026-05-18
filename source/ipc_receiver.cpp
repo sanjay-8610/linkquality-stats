@@ -22,6 +22,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/timerfd.h>
+#include <poll.h>
 #include <unistd.h>
 
 #include "ipc_receiver.h"
@@ -87,10 +89,45 @@
 {
      ipc_recv_t *self = static_cast<ipc_recv_t*>(arg);
     lq_util_info_print(LQ_LQTY,
-        "%s:%d IPC receiver thread started, listening on %s\n",
-        __func__, __LINE__, LQ_STATS_SOCKET_PATH);
+        "MAIN-THREAD %s:%d unified event loop started, sock_fd=%d timer_fd=%d\n",
+        __func__, __LINE__, self->m_sock, self->m_timerfd);
+
+    struct pollfd fds[2];
+    fds[0].fd     = self->m_sock;
+    fds[0].events = POLLIN;
+    fds[1].fd     = self->m_timerfd;
+    fds[1].events = POLLIN;
 
     while (!self->m_exit) {
+        fds[0].revents = 0;
+        fds[1].revents = 0;
+
+        int rc = poll(fds, 2, -1);
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            if (self->m_exit) break;
+            lq_util_error_print(LQ_LQTY,
+                "MAIN-THREAD %s:%d poll() failed: %s\n", __func__, __LINE__, strerror(errno));
+            continue;
+        }
+
+        /* ---- Timer fired: run periodic scoring ---- */
+        if (fds[1].revents & POLLIN) {
+            uint64_t expirations = 0;
+            ssize_t s = read(self->m_timerfd, &expirations, sizeof(expirations));
+            if (s != sizeof(expirations)) {
+                lq_util_error_print(LQ_LQTY,
+                    "MAIN-THREAD %s:%d timerfd read failed: %s\n", __func__, __LINE__, strerror(errno));
+            } else {
+                lq_util_dbg_print(LQ_LQTY,
+                    "MAIN-THREAD %s:%d timer tick, expirations=%lu\n",
+                    __func__, __LINE__, (unsigned long)expirations);
+                self->m_qmgr->run_periodic();
+            }
+        }
+
+        /* ---- IPC socket ready: dispatch message ---- */
+        if (fds[0].revents & POLLIN) {
         /* Step 1: peek at the 3-byte TLV header to learn the payload size */
         lq_tlv_t hdr_peek;
         ssize_t peeked = recvfrom(self->m_sock, &hdr_peek, sizeof(hdr_peek), MSG_PEEK, NULL, NULL);
@@ -291,23 +328,25 @@
         }
 
         free(buf);
+        } /* end if POLLIN on socket */
     }
 
     lq_util_info_print(LQ_LQTY,
-        "%s:%d IPC receiver thread exiting\n", __func__, __LINE__);
+        "MAIN-THREAD %s:%d unified event loop exiting\n", __func__, __LINE__);
     return NULL;
 }
 
-int ipc_recv_t::ipc_receiver_start(void)
+int ipc_recv_t::ipc_receiver_start(unsigned int sampling_sec)
 {
     struct sockaddr_un addr;
 
     m_exit = 0;
 
+    /* ---- Create IPC socket ---- */
     m_sock = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (m_sock < 0) {
         lq_util_error_print(LQ_LQTY,
-            "%s:%d socket() failed: %s\n", __func__, __LINE__, strerror(errno));
+            "MAIN-THREAD %s:%d socket() failed: %s\n", __func__, __LINE__, strerror(errno));
         return -1;
     }
 
@@ -320,16 +359,36 @@ int ipc_recv_t::ipc_receiver_start(void)
 
     if (bind(m_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         lq_util_error_print(LQ_LQTY,
-            "%s:%d bind(%s) failed: %s\n",
+            "MAIN-THREAD %s:%d bind(%s) failed: %s\n",
             __func__, __LINE__, LQ_STATS_SOCKET_PATH, strerror(errno));
         close(m_sock);
         m_sock = -1;
         return -1;
     }
 
-    if (pthread_create(&m_thread, NULL, receiver_thread, this) != 0) {
+    /* ---- Create periodic timer ---- */
+    m_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    if (m_timerfd < 0) {
         lq_util_error_print(LQ_LQTY,
-            "%s:%d pthread_create failed: %s\n", __func__, __LINE__, strerror(errno));
+            "MAIN-THREAD %s:%d timerfd_create() failed: %s\n", __func__, __LINE__, strerror(errno));
+        close(m_sock);
+        m_sock = -1;
+        unlink(LQ_STATS_SOCKET_PATH);
+        return -1;
+    }
+
+    struct itimerspec its;
+    its.it_value.tv_sec    = sampling_sec;
+    its.it_value.tv_nsec   = 0;
+    its.it_interval.tv_sec = sampling_sec;
+    its.it_interval.tv_nsec = 0;
+
+    if (timerfd_settime(m_timerfd, 0, &its, NULL) < 0) {
+        lq_util_error_print(LQ_LQTY,
+            "MAIN-THREAD %s:%d timerfd_settime(%us) failed: %s\n",
+            __func__, __LINE__, sampling_sec, strerror(errno));
+        close(m_timerfd);
+        m_timerfd = -1;
         close(m_sock);
         m_sock = -1;
         unlink(LQ_STATS_SOCKET_PATH);
@@ -337,13 +396,36 @@ int ipc_recv_t::ipc_receiver_start(void)
     }
 
     lq_util_info_print(LQ_LQTY,
-        "%s:%d IPC receiver started on %s\n", __func__, __LINE__, LQ_STATS_SOCKET_PATH);
+        "MAIN-THREAD %s:%d timerfd armed: interval=%us\n", __func__, __LINE__, sampling_sec);
+
+    /* ---- Spawn unified event loop thread ---- */
+    if (pthread_create(&m_thread, NULL, receiver_thread, this) != 0) {
+        lq_util_error_print(LQ_LQTY,
+            "MAIN-THREAD %s:%d pthread_create failed: %s\n", __func__, __LINE__, strerror(errno));
+        close(m_timerfd);
+        m_timerfd = -1;
+        close(m_sock);
+        m_sock = -1;
+        unlink(LQ_STATS_SOCKET_PATH);
+        return -1;
+    }
+
+    lq_util_info_print(LQ_LQTY,
+        "MAIN-THREAD %s:%d unified event loop started on %s (sock=%d timer=%d)\n",
+        __func__, __LINE__, LQ_STATS_SOCKET_PATH, m_sock, m_timerfd);
     return 0;
 }
 
 void ipc_recv_t::ipc_receiver_stop(void)
 {
+    lq_util_info_print(LQ_LQTY,
+        "MAIN-THREAD %s:%d stopping event loop\n", __func__, __LINE__);
     m_exit = 1;
+
+    if (m_timerfd >= 0) {
+        close(m_timerfd);
+        m_timerfd = -1;
+    }
 
     if (m_sock >= 0) {
         shutdown(m_sock, SHUT_RDWR);
@@ -355,20 +437,23 @@ void ipc_recv_t::ipc_receiver_stop(void)
     unlink(LQ_STATS_SOCKET_PATH);
 
     lq_util_info_print(LQ_LQTY,
-        "%s:%d IPC receiver stopped\n", __func__, __LINE__);
+        "MAIN-THREAD %s:%d event loop stopped\n", __func__, __LINE__);
 }
 
 ipc_recv_t::ipc_recv_t()
 {
     m_qmgr = NULL;
     m_sock = -1;
+    m_timerfd = -1;
     m_exit = 0;
 }
 
-void ipc_recv_t::init(qmgr_t *qmgr)
+void ipc_recv_t::init(qmgr_t *qmgr, unsigned int sampling_sec)
 {
     m_qmgr = qmgr;
-    ipc_receiver_start();
+    lq_util_info_print(LQ_LQTY,
+        "MAIN-THREAD %s:%d init: sampling=%us\n", __func__, __LINE__, sampling_sec);
+    ipc_receiver_start(sampling_sec);
 }
 
 ipc_recv_t::~ipc_recv_t()

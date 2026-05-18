@@ -46,28 +46,30 @@ class qmgr_t;
 class ipc_recv_t {
 private: 
     int  m_sock;
+    int  m_timerfd;
     pthread_t        m_thread;
     int m_exit;
     qmgr_t *m_qmgr;
 public:
 /*
- * Start the IPC receiver thread.
- * Creates an AF_UNIX SOCK_DGRAM socket on /tmp/linkquality_stats.sock,
- * spawns receiver_thread to dispatch incoming messages from OneWifi.
+ * Start the unified event loop thread.
+ * Creates an AF_UNIX SOCK_DGRAM socket and a timerfd, then spawns
+ * a single thread that uses poll() to handle both IPC messages and
+ * the periodic scoring timer.
  * Returns 0 on success, -1 on error.
  */
-int ipc_receiver_start(void);
+int ipc_receiver_start(unsigned int sampling_sec);
 const char *msg_type_to_str(uint32_t type);
 
 int parse_tlv(const uint8_t *buf, size_t buf_sz,uint32_t *msg_type_out,
     const uint8_t **payload, size_t *payload_sz);
 static void *receiver_thread(void *arg);
 /*
- * Stop the IPC receiver thread.
- * Sets exit flag, shuts down socket, joins thread, unlinks socket file.
+ * Stop the unified event loop thread.
+ * Sets exit flag, shuts down socket+timerfd, joins thread, unlinks socket file.
  */
 void ipc_receiver_stop(void);
-void init(qmgr_t *qmgr);
+void init(qmgr_t *qmgr, unsigned int sampling_sec);
 ipc_recv_t();
 ~ipc_recv_t();
 
