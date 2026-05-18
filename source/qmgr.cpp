@@ -30,6 +30,7 @@
 #include <cjson/cJSON.h>
 
 qmgr_t* qmgr_t::instance = NULL;
+std::string qmgr_t::m_t2_cols_json;
 
 /* ---- Callback infrastructure (moved from run_qmgr.cpp) ---- */
 static qmgr_report_batch_cb_t qmgr_batch_cb = NULL;
@@ -116,7 +117,7 @@ void  qmgr_t::trim_cjson_array(cJSON *arr, int max_len)
     }
 }
 
-void qmgr_t::update_json_unlocked(const char *str, lq_score_map_t u_map, cJSON *out_obj, bool &alarm)
+void qmgr_t::update_json_unlocked(const char *str, const lq_score_map_t &u_map, cJSON *out_obj, bool &alarm)
 {
     char tmp[MAX_LINE_SIZE];
     unsigned int i;
@@ -175,7 +176,7 @@ void qmgr_t::update_json_unlocked(const char *str, lq_score_map_t u_map, cJSON *
     }
 }
 
-void qmgr_t::update_json(const char *str, lq_score_map_t u_map, cJSON *out_obj, bool &alarm)
+void qmgr_t::update_json(const char *str, const lq_score_map_t &u_map, cJSON *out_obj, bool &alarm)
 {
     pthread_mutex_lock(&m_json_lock);
     update_json_unlocked(str, u_map, out_obj, alarm);
@@ -434,10 +435,23 @@ int qmgr_t::run()
                 __func__,__LINE__, m_wifi_metrics_map.size());
             double lq_sum_sq_iter = 0.0;
             int lq_count_iter = 0;
-            std::vector<std::string> t2_station_metrics;
             double t2_lq_sum = 0.0;
-            double t2_caff_conn_sum = 0.0;
-            double t2_caff_unconn_sum = 0.0;
+            double t2_gc_sum = 0.0;
+            double t2_sc_sum = 0.0;
+            int t2_gc_count = 0;
+            int t2_sc_count = 0;
+
+            // T2 row data: each entry is one client's row values
+            struct t2_row_t {
+                std::string mac;
+                double lq;
+                double gc;
+                double sc;
+                double lq_vals[MAX_SCORE_PARAMS];
+                caffinity_result_t caff_result;
+            };
+            std::vector<t2_row_t> t2_rows;
+            t2_rows.reserve(m_wifi_metrics_map.size());
 
             // Hold m_json_lock for all map iterations (linkq + caffinity)
             pthread_mutex_lock(&m_json_lock);
@@ -447,6 +461,7 @@ int qmgr_t::run()
             char time_str[MAX_LINE_SIZE];
             get_local_time(time_str, sizeof(time_str), true);
 
+            linkq_params_t *score_params = linkq_t::get_score_params();
             int connected_count = 0;
             int unconnected_count = 0;
             double conn_sum_sq_iter = 0.0;
@@ -456,6 +471,16 @@ int qmgr_t::run()
             for (auto& [mac, wm] : m_wifi_metrics_map) {
                 if (!wm) continue;
 
+                t2_row_t row;
+                row.mac = wm->m_mac;
+                row.lq = 0.0;
+                row.gc = 0.0;
+                row.sc = 0.0;
+                memset(row.lq_vals, 0, sizeof(row.lq_vals));
+                memset(&row.caff_result, 0, sizeof(caffinity_result_t));
+                bool has_lq = false;
+                bool has_caff = false;
+
                 // Process linkq (connected clients only)
                 if (wm->lq) {
                     connected_lq_count++;
@@ -463,15 +488,19 @@ int qmgr_t::run()
                     if (!u_map.empty() || rapid_disconnect) {
                         update_json_unlocked(mac.c_str(), u_map, out_obj, alarm);
 
-                        double lq_score = u_map["DOWNLINK_Score"];
+                        auto lq_it = u_map.find("DOWNLINK_Score");
+                        double lq_score = (lq_it != u_map.end()) ? lq_it->second : 0.0;
                         lq_sum_sq_iter += lq_score * lq_score;
                         lq_count_iter++;
 
-                        // Collect per-station metric for T2 telemetry
-                        char t2_buf[256];
-                        snprintf(t2_buf, sizeof(t2_buf), "mac=%s,score=%.2f", wm->m_mac.c_str(), lq_score);
-                        t2_station_metrics.emplace_back(t2_buf);
+                        row.lq = lq_score;
+                        // Extract link params in m_score_params order
+                        for (unsigned int p = 0; p < MAX_SCORE_PARAMS; p++) {
+                            auto it = u_map.find(score_params[p].name);
+                            row.lq_vals[p] = (it != u_map.end()) ? it->second : 0.0;
+                        }
                         t2_lq_sum += lq_score;
+                        has_lq = true;
                     }
                 }
 
@@ -479,20 +508,37 @@ int qmgr_t::run()
                 if (wm->caff) {
                     caffinity_result_t result = wm->caff->run_algorithm_caffinity(wm->m_mac.c_str());
                     double score = result.score;
+                    row.caff_result = result;
 
                     if (result.connected) {
                         populate_caffinity_client_json(wm->m_mac.c_str(), score, time_str,
                                                       conn_arr, unconn_arr, "ConnectedClients");
                         conn_sum_sq_iter += score * score;
                         connected_count++;
-                        t2_caff_conn_sum += score;
+                        // GC score for connected: use caffinity score
+                        row.gc = score;
+                        t2_gc_sum += score;
+                        t2_gc_count++;
                     } else {
                         populate_caffinity_client_json(wm->m_mac.c_str(), score, time_str,
                                                       unconn_arr, conn_arr, "UnconnectedClients");
                         unconn_sum_sq_iter += score * score;
                         unconnected_count++;
-                        t2_caff_unconn_sum += score;
+                        row.gc = score;
+                        t2_gc_sum += score;
+                        t2_gc_count++;
                     }
+
+                    // SC score: connected_time / (connected_time + disconnected_time + sleep_time)
+                    double sc_total = result.connected_time + result.disconnected_time + result.sleep_time;
+                    row.sc = (sc_total > 0.0) ? (result.connected_time / sc_total) : 0.0;
+                    t2_sc_sum += row.sc;
+                    t2_sc_count++;
+                    has_caff = true;
+                }
+
+                if (has_lq || has_caff) {
+                    t2_rows.emplace_back(std::move(row));
                 }
             }
 
@@ -526,14 +572,102 @@ int qmgr_t::run()
                 if (qmgr_is_batch_registered()) {
                     push_reporting_subdoc();
                 }
-                lq_util_error_print(LQ_LQTY, "%s:%d T2 events: stations=%zu\n", __func__, __LINE__, t2_station_metrics.size());
-                // Publish T2 telemetry at reporting interval (only if we have station data)
-                if (!t2_station_metrics.empty()) {
-                    double avg_lq = t2_lq_sum / lq_count_iter;
-                    double avg_caff = (connected_count > 0) ? (t2_caff_conn_sum / connected_count) : 0.0;
-                    double avg_ucaff = (unconnected_count > 0) ? (t2_caff_unconn_sum / unconnected_count) : 0.0;
-                    lq_util_error_print(LQ_LQTY, "%s:%d Publishing T2 events: stations=%zu avg_lq=%.2f avg_caff=%.2f avg_ucaff=%.2f\n", __func__, __LINE__, t2_station_metrics.size(), avg_lq, avg_caff, avg_ucaff);
-                    lq_publish_t2_events(t2_station_metrics, avg_lq, avg_caff, avg_ucaff);
+                // Build and publish columnar T2 JSON
+                if (!t2_rows.empty()) {
+                    double avg_lq = (lq_count_iter > 0) ? (t2_lq_sum / lq_count_iter) : 0.0;
+                    double avg_gc = (t2_gc_count > 0) ? (t2_gc_sum / t2_gc_count) : 0.0;
+                    double avg_sc = (t2_sc_count > 0) ? (t2_sc_sum / t2_sc_count) : 0.0;
+
+                    // Build JSON using cJSON
+                    cJSON *t2_root = cJSON_CreateObject();
+                    char ts_buf[64];
+                    get_local_time(ts_buf, sizeof(ts_buf), false);
+                    cJSON_AddStringToObject(t2_root, "Time", ts_buf);
+
+                    // Home averages
+                    cJSON *home = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(home, "lq", avg_lq);
+                    cJSON_AddNumberToObject(home, "gc", avg_gc);
+                    cJSON_AddNumberToObject(home, "sc", avg_sc);
+                    cJSON_AddItemToObject(t2_root, "Home", home);
+
+                    // Cols: build once and cache as static JSON string
+                    linkq_params_t *params = score_params;
+                    if (m_t2_cols_json.empty()) {
+                        cJSON *cols = cJSON_CreateArray();
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("Mac"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("lq"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("gc"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("sc"));
+                        for (unsigned int p = 0; p < MAX_SCORE_PARAMS; p++) {
+                            cJSON_AddItemToArray(cols, cJSON_CreateString(params[p].name));
+                        }
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("AUTH_ATTEMPTS"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("AUTH_FAIL"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("ASSOC_ATTEMPTS"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("ASSOC_FAIL"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("DHCP_DISCOVER"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("DHCP_OFFER"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("DHCP_REQUEST"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("DHCP_DECLINE"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("DHCP_NAK"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("DHCP_ACK"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("connected_time"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("disconnected_time"));
+                        cJSON_AddItemToArray(cols, cJSON_CreateString("sleep_time"));
+                        char *cols_str = cJSON_PrintUnformatted(cols);
+                        if (cols_str) {
+                            m_t2_cols_json = cols_str;
+                            free(cols_str);
+                        }
+                        cJSON_Delete(cols);
+                    }
+                    // Add cached Cols as raw JSON
+                    cJSON *cols_raw = cJSON_Parse(m_t2_cols_json.c_str());
+                    if (cols_raw) {
+                        cJSON_AddItemToObject(t2_root, "Cols", cols_raw);
+                    }
+
+                    // Rows array
+                    cJSON *rows = cJSON_CreateArray();
+                    for (const auto &row : t2_rows) {
+                        cJSON *r = cJSON_CreateArray();
+                        cJSON_AddItemToArray(r, cJSON_CreateString(row.mac.c_str()));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.lq));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.gc));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.sc));
+                        // Link params in order (pre-extracted)
+                        for (unsigned int p = 0; p < MAX_SCORE_PARAMS; p++) {
+                            cJSON_AddItemToArray(r, cJSON_CreateNumber(row.lq_vals[p]));
+                        }
+                        // GC params
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.auth_attempts));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.auth_failures));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.assoc_attempts));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.assoc_failures));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.dhcp_discover));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.dhcp_offer));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.dhcp_request));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.dhcp_decline));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.dhcp_nak));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.dhcp_ack));
+                        // SC params
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.connected_time));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.disconnected_time));
+                        cJSON_AddItemToArray(r, cJSON_CreateNumber(row.caff_result.sleep_time));
+                        cJSON_AddItemToArray(rows, r);
+                    }
+                    cJSON_AddItemToObject(t2_root, "Rows", rows);
+
+                    char *t2_json_str = cJSON_PrintUnformatted(t2_root);
+                    if (t2_json_str) {
+                        lq_util_error_print(LQ_LQTY, "%s:%d Publishing WEI_SCORE: rows=%zu avg_lq=%.2f avg_gc=%.2f avg_sc=%.2f\n",
+                            __func__, __LINE__, t2_rows.size(), avg_lq, avg_gc, avg_sc);
+                        std::string t2_json(t2_json_str);
+                        lq_publish_t2_events(t2_json);
+                        free(t2_json_str);
+                    }
+                    cJSON_Delete(t2_root);
                 }
             }
             pthread_mutex_lock(&m_lock);

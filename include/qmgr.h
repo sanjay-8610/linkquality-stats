@@ -88,6 +88,9 @@ class qmgr_t {
     double m_rms_lq_sum_sq;
     int m_rms_lq_count;
 
+    // Cached T2 Cols JSON string (built once, reused)
+    static std::string m_t2_cols_json;
+
     cJSON* create_affinity_template(const std::string &mac_str,unsigned int vap_index);
     cJSON* create_caffinity_template(const std::string &mac_str);
     void populate_caffinity_client_json(const char *mac_cstr, double score, const char *timestamp,
@@ -108,8 +111,8 @@ public:
     char *get_local_time(char *buff, unsigned int len,bool flag);
     cJSON *create_dev_template(const std::string &mac_str,unsigned int vap_index);
     static int set_max_snr_radios(radio_max_snr_t *max_snr_val);    
-    void update_json(const char *str, lq_score_map_t u_map, cJSON *out_obj, bool &alarm);
-    void update_json_unlocked(const char *str, lq_score_map_t u_map, cJSON *out_obj, bool &alarm);
+    void update_json(const char *str, const lq_score_map_t &u_map, cJSON *out_obj, bool &alarm);
+    void update_json_unlocked(const char *str, const lq_score_map_t &u_map, cJSON *out_obj, bool &alarm);
     void update_caffinity_graph();
     void update_rms_json(cJSON *root, const char *obj_key,
                          const char *key1, double val1,

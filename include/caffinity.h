@@ -40,6 +40,21 @@ typedef struct {
 typedef struct {
     double score;
     bool connected;
+    // GC params
+    unsigned int auth_attempts;
+    unsigned int auth_failures;
+    unsigned int assoc_attempts;
+    unsigned int assoc_failures;
+    unsigned int dhcp_discover;
+    unsigned int dhcp_offer;
+    unsigned int dhcp_request;
+    unsigned int dhcp_decline;
+    unsigned int dhcp_nak;
+    unsigned int dhcp_ack;
+    // SC params
+    double connected_time;
+    double disconnected_time;
+    double sleep_time;
 } caffinity_result_t;
 
 #if 0

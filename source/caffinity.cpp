@@ -179,6 +179,19 @@ caffinity_result_t caffinity_t::run_algorithm_caffinity(const char *mac)
     // Initialize result
     result.score = 0.0;
     result.connected = false;
+    result.auth_attempts = 0;
+    result.auth_failures = 0;
+    result.assoc_attempts = 0;
+    result.assoc_failures = 0;
+    result.dhcp_discover = 0;
+    result.dhcp_offer = 0;
+    result.dhcp_request = 0;
+    result.dhcp_decline = 0;
+    result.dhcp_nak = 0;
+    result.dhcp_ack = 0;
+    result.connected_time = 0.0;
+    result.disconnected_time = 0.0;
+    result.sleep_time = 0.0;
 
     lq_util_info_print(LQ_CAFF, "caffinity %s:%d Computing caffinity score for MAC %s\n",
                                 __func__, __LINE__, mac);
@@ -191,6 +204,16 @@ caffinity_result_t caffinity_t::run_algorithm_caffinity(const char *mac)
             "caffinity %s:%d Skipping score for MAC %s — client in power save mode\n",
             __func__, __LINE__, mac);
         result.connected = m_connected;
+        result.auth_attempts = m_auth_attempts;
+        result.auth_failures = m_auth_failures;
+        result.assoc_attempts = m_assoc_attempts;
+        result.assoc_failures = m_assoc_failures;
+        result.dhcp_discover = m_discover;
+        result.dhcp_offer = m_offer;
+        result.dhcp_request = m_request;
+        result.dhcp_decline = m_decline;
+        result.dhcp_nak = m_nak;
+        result.dhcp_ack = m_ack;
         pthread_mutex_unlock(&m_lock);
         return result;
     }
@@ -226,6 +249,22 @@ caffinity_result_t caffinity_t::run_algorithm_caffinity(const char *mac)
                                   + (double)avg.disconnected_time.tv_nsec / 1e9;
         double sleep_sec        = (double)avg.sleep_time.tv_sec
                                   + (double)avg.sleep_time.tv_nsec / 1e9;
+
+        // Populate GC params
+        result.auth_attempts = m_auth_attempts;
+        result.auth_failures = m_auth_failures;
+        result.assoc_attempts = m_assoc_attempts;
+        result.assoc_failures = m_assoc_failures;
+        result.dhcp_discover = m_discover;
+        result.dhcp_offer = m_offer;
+        result.dhcp_request = m_request;
+        result.dhcp_decline = m_decline;
+        result.dhcp_nak = m_nak;
+        result.dhcp_ack = m_ack;
+        // Populate SC params
+        result.connected_time = connected_sec;
+        result.disconnected_time = disconnected_sec;
+        result.sleep_time = sleep_sec;
 
         pthread_mutex_unlock(&m_lock);
         
@@ -354,6 +393,17 @@ caffinity_result_t caffinity_t::run_algorithm_caffinity(const char *mac)
                                __func__, __LINE__, score, mac, m_connected);
     
     result.score = score ;
+    // Populate GC params for unconnected path
+    result.auth_attempts = m_auth_attempts;
+    result.auth_failures = m_auth_failures;
+    result.assoc_attempts = m_assoc_attempts;
+    result.assoc_failures = m_assoc_failures;
+    result.dhcp_discover = m_discover;
+    result.dhcp_offer = m_offer;
+    result.dhcp_request = m_request;
+    result.dhcp_decline = m_decline;
+    result.dhcp_nak = m_nak;
+    result.dhcp_ack = m_ack;
     return result;
 }
 

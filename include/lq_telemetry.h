@@ -5,9 +5,7 @@
 #include <vector>
 #include <telemetry_busmessage_sender.h>
 
-void lq_publish_t2_events(const std::vector<std::string> &station_metrics,
-                           double avg_lq_score, double avg_caff_score,
-                           double avg_ucaff_score);
+void lq_publish_t2_events(const std::string &t2_json);
 
 
 
